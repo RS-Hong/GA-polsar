@@ -1,0 +1,228 @@
+import re
+import math
+import random
+import copy
+import readbin
+import numpy as np
+import ga_svm
+from  multiprocessing import Pool
+
+# 1.选出初始种群
+# 2.计算适应度函数 
+# 3.交叉变异产生新的种群 
+# 4.最优适应度值不再变化
+RETAIN_RATE = 0.2
+RANDOM_SELECT_RATE = 0.5
+VARIATION_RATE = 0.05
+
+class GATS(object):
+    """docstring for GATS"""
+    def __init__(self, dim,count,dataset):
+        super(GATS, self).__init__()
+        """
+        self.dim 表示初始维度即染色体长度
+        self.ininum初始种群大小
+        """
+        self.dim = dim
+        self.ininum = count
+        self.dataset = dataset
+        self.best = []
+        self.population = self.gen_population(dim,count)
+        self.fit_population = []    #将计算过适应度函数的染色体和适应度值存入列表中避免重复计算
+        self.fit_value = []
+        self.final_res = []
+        self.cfx_mx = []
+
+
+    def gen_population(self,dim,count):
+        '''生成初始种群'''
+        population = []
+        for i in range(count):
+            chromosome = self.gen_chromosome(dim)
+            while chromosome in population:
+                #判断染色体是否已经存在
+                chromosome = self.gen_chromosome(dim)                
+            population.append(chromosome)
+        return population
+    
+    def gen_chromosome(self,dim):
+        #随机产生一个染色体10进制test_chromosome
+        #转化成二进制表示
+        #转化生列表形式
+        tem_chromosome = random.randint(0,2**dim-1)
+        bchromosome = bin(tem_chromosome)
+        res = re.match(r"0b(.+)",bchromosome)
+        tem_chromosome = res.group(1)
+        num = dim-len(tem_chromosome)
+        tem_chromosome = "0" * num + tem_chromosome
+        tem_chromosome = [i for i in tem_chromosome]
+        return tem_chromosome
+
+    def evolve(self):
+        retain_tup = self.retain()
+        self.crossover(retain_tup,2)
+        self.variation()
+
+    def fitness(self,chromosome):
+        '''计算每条染色体的适应度值
+        将最大的适应度及对应的染色体保存进self.best,self.final_res用来记录最终的最优结果
+        dataset : 根据染色体形状得到对应特征空间数据集
+        num: 分类准确度
+        cfx_mx: 混淆矩阵
+        result: 分类结果
+        fit_value: 适应度函数值'''
+        npch = np.array(list(map(int,chromosome)))  #将chromosome转化为int型的array
+        dataset = self.dataset[:,:,np.where(npch == 1)]
+        x,y,m,k = dataset.shape
+        dataset = dataset.reshape(x,y,k)
+        num,cfx_mx,result = ga_svm.msvm(dataset)
+        # fit_value = 1/(sum(list(map(int,chromosome))) + 1) + num    #适应度函数公式
+        fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2
+        if len(self.best) == 0:
+            self.best = [chromosome,fit_value]
+            self.final_res = result
+            self.cfx_mx = cfx_mx
+        else:
+            if fit_value > self.best[1]:
+                self.best[0] = copy.deepcopy(chromosome)
+                self.best[1] = fit_value
+                self.final_res = result
+                self.cfx_mx = cfx_mx
+                print(chromosome,fit_value)
+        return fit_value
+
+    def mtp_fit(self,chromosome):
+        '''用于多进程操作'''
+        return chromosome, self.fitness(chromosome)
+
+    def retain(self):
+        '''得到种群保留下来的染色体，从大到小排列
+        比例为RATAIN_RATE个染色体是直接保留的，
+        比例为RANDOM_SELECT_RATE个是随机保留的'''
+        fit_list = []
+        chro_list = []
+        new_fitlist = []
+        for chromosome in self.population:
+            if chromosome in self.fit_population:
+                fit_list.append((chromosome,self.fit_value[self.fit_population.index(chromosome)]))
+            else:
+                #加进程？
+                # chromosome_fitness = self.fitness(chromosome)
+                # fit_list.append((chromosome,chromosome_fitness))
+                # self.fit_population.append(chromosome)
+                # self.fit_value.append(chromosome_fitness)
+                #2019.11.13修改增加进程
+                chro_list.append(chromosome)
+        if len(chro_list) != 0:
+            pool = Pool(4)
+            new_fitlist = pool.map(self.mtp_fit, chro_list)
+            fit_list = fit_list + new_fitlist
+            for l in new_fitlist:
+                self.fit_population.append(l[0])
+                self.fit_value.append(l[1])
+        # fit_list = [(chromosome,self.fitness(chromosome)) for chromosome in self.population]
+        fit_list.sort(key = lambda x:x[1],reverse = True)
+        retain_num = math.ceil(self.ininum * RETAIN_RATE)
+        #retain_tup[(chromosome,fitnessvalue),......]
+        retain_tup = fit_list[:retain_num]
+        for chromosome in fit_list[retain_num:]:
+            if random.random() < RANDOM_SELECT_RATE:
+                retain_tup.append(chromosome)
+        return retain_tup
+
+    def crossover(self,retain_tup,method):
+        '''交叉算子'''
+        children = []
+        chil_len = self.ininum - len(retain_tup)
+        if method == 1:                
+            # 1.单点交叉
+            while len(children) < chil_len:
+                male = random.randint(0,len(retain_tup)-1)
+                female = random.randint(0,len(retain_tup)-1)
+                if male != female:
+                   #随机选择交叉点(单点交叉，如果剩余容量大于1则交叉后两条染色体都加入种群，否则只加入一条)
+                    cross_pos = random.randint(0, self.dim-1)
+                    if chil_len - len(children) > 1:
+                        male = retain_tup[male][0]
+                        female = retain_tup[female][0]
+                        chil_male = male[:cross_pos] + female[cross_pos:]
+                        chil_female = female[:cross_pos] + male[cross_pos:]
+                        children.append(chil_male)
+                        children.append(chil_female)
+                    else:
+                        male = retain_tup[male][0]
+                        female = retain_tup[female][0]
+                        chil_male = male[:cross_pos] + female[cross_pos:]
+                        children.append(chil_male)        
+            self.population = [i[0] for i in retain_tup] + children
+        elif method == 2:
+            #两点交叉
+            while len(children) < chil_len:
+                male = random.randint(0,len(retain_tup)-1)
+                female = random.randint(0,len(retain_tup)-1)
+                if male != female:
+                    cross_pos1 = random.randint(0,self.dim-1)
+                    if cross_pos1 < self.dim:
+                        cross_pos2 = random.randint(cross_pos1 + 1,self.dim)
+                        if chil_len - len(children) > 1:
+                            male = retain_tup[male][0]
+                            female = retain_tup[female][0]
+                            chil_male = male[:cross_pos1] + female[cross_pos1:cross_pos2] + male[cross_pos2:]
+                            children.append(chil_male)
+                            chil_female = female[:cross_pos1] + male[cross_pos1:cross_pos2] + female[cross_pos2:]
+                            children.append(chil_male)
+                            children.append(chil_female)
+                        else:
+                            male = retain_tup[male][0]
+                            female = retain_tup[female][0]
+                            chil_male = male[:cross_pos1] + female[cross_pos1:cross_pos2] + male[cross_pos2:]
+                            children.append(chil_male)
+            self.population = [i[0] for i in retain_tup] + children
+
+
+    def variation(self):
+        '''变异算子'''
+        for i in range(len(self.population)):
+            if random.random() < VARIATION_RATE:
+                #变异位置
+                #要变异的染色体
+                pos = random.randint(0,len(self.population) - 1)
+                var_chrom = self.population[i]
+                fit_value = self.fitness(var_chrom)
+                if var_chrom[pos] == '0':
+                    var_chrom[pos] = '1'
+                else:
+                    var_chrom[pos] = '0'
+                if var_chrom not in self.population:
+                    if self.fitness(var_chrom) > fit_value:
+                        self.population[i] = var_chrom
+
+
+
+def main():
+    fit_pool = []  # 适应度函数值池,用以绘制折线图
+
+    directory = "C:\\Users\\Administrator\\Desktop\\AIRSAR_Flevoland_LEE\\T3"
+    dataset, trait_pool = readbin.readallbin(directory, 750, 1024)
+    x, y, k = dataset.shape
+    gats = GATS(k,8,dataset)
+    j = 0
+    #1.j控制进化代数
+    #2.用for循环设定初始进化代数，并将最优染色体对应的结果与混淆矩阵绘制
+    for i in range(6):
+        gats.evolve()
+        j += 1
+        print('第 %d 次迭代正在进行' % (j))
+        fit_pool.append(gats.best[1])
+        if j == 6:
+            readbin.draw_fit(fit_pool)
+            readbin.draw_cls(gats.final_res,15)
+            x,y = gats.cfx_mx.shape
+            for i in range(x):
+                for j in range(y):
+                    print("%6d" % (gats.cfx_mx[i,j]),end='')
+                print("")
+        print(gats.best)
+
+if __name__ == '__main__':
+    main()
