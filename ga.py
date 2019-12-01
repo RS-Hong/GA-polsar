@@ -79,13 +79,13 @@ class GATS(object):
         # fit_value = 1/(sum(list(map(int,chromosome))) + 1) + num    #适应度函数公式
         fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2
         if len(self.best) == 0:
-            self.best = [chromosome,fit_value]
+            self.best = copy.deepcopy([chromosome,fit_value])
             self.final_res = result
             self.cfx_mx = cfx_mx
         else:
             if fit_value > self.best[1]:
                 self.best[0] = copy.deepcopy(chromosome)
-                self.best[1] = fit_value
+                self.best[1] = copy.deepcopy(fit_value)
                 self.final_res = result
                 self.cfx_mx = cfx_mx
                 print(chromosome,fit_value)
