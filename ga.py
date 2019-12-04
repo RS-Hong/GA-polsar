@@ -1,11 +1,11 @@
 import re
 import math
 import random
-import copy
 import readbin
 import numpy as np
 import ga_svm
-from  multiprocessing import Pool
+import os
+from  multiprocessing import Pool,Lock
 
 # 1.选出初始种群
 # 2.计算适应度函数 
@@ -26,12 +26,9 @@ class GATS(object):
         self.dim = dim
         self.ininum = count
         self.dataset = dataset
-        self.best = []
         self.population = self.gen_population(dim,count)
         self.fit_population = []    #将计算过适应度函数的染色体和适应度值存入列表中避免重复计算
         self.fit_value = []
-        self.final_res = []
-        self.cfx_mx = []
 
 
     def gen_population(self,dim,count):
@@ -63,7 +60,7 @@ class GATS(object):
         self.crossover(retain_tup,2)
         self.variation()
 
-    def fitness(self,chromosome):
+    def fitness(self,chromosome,lock):
         '''计算每条染色体的适应度值
         将最大的适应度及对应的染色体保存进self.best,self.final_res用来记录最终的最优结果
         dataset : 根据染色体形状得到对应特征空间数据集
@@ -71,29 +68,54 @@ class GATS(object):
         cfx_mx: 混淆矩阵
         result: 分类结果
         fit_value: 适应度函数值'''
+        best = []
+        currentpath = os.getcws()
+        bestpath = os.path.join(currentpath, 'best.txt')
+        clsresultpath = os.path.join(currentpath, 'cls_result.txt')
+        cfxmxpath = os.path.join(currentpath, 'cfx_mx.txt')
+        
         npch = np.array(list(map(int,chromosome)))  #将chromosome转化为int型的array
         dataset = self.dataset[:,:,np.where(npch == 1)]
         x,y,m,k = dataset.shape
         dataset = dataset.reshape(x,y,k)
-        num,cfx_mx,result = ga_svm.msvm(dataset)
+        num, cfx_mx, result = ga_svm.msvm(dataset)
         # fit_value = 1/(sum(list(map(int,chromosome))) + 1) + num    #适应度函数公式
         fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2
-        if len(self.best) == 0:
-            self.best = copy.deepcopy([chromosome,fit_value])
-            self.final_res = result
-            self.cfx_mx = cfx_mx
+        lock.acquire()
+        if os.path.exists(bestpath) == False:
+            #如若存放best的文件不存在，则创建新的文件用以存放best，分类结果result，混淆矩阵cfx_mx
+            best = [chromosome, fit_value]
+            np.savetxt(bestpath, np.array(best), fmt = '%f', delimiter=',')
+            np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
+            np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
         else:
-            if fit_value > self.best[1]:
-                self.best[0] = copy.deepcopy(chromosome)
-                self.best[1] = copy.deepcopy(fit_value)
-                self.final_res = result
-                self.cfx_mx = cfx_mx
-                print(chromosome,fit_value)
+            #如果存在则取出best去最新的best比较，将最优的best覆盖原有文件
+            oldbest = np.loadtxt(bestpath, delimiter = ',')
+            if best[1] > oldbest[1]:
+                np.savetxt(bestpath, np.array(best), fmt = '%f', delimiter=',')
+                np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
+                np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
+        lock.release()
+        # self.best等变量，由于多进程的存在，每个进程都会带有一分完整的资源，使得内部的修改对其他进程不会生效。
+        # 19.12.3修改为通过文件存储来保存多进程的修改
+        # 19.12.4增加进程锁，保护文件内容安全
+        # if len(self.best) == 0:
+        #     best = [chromosome,fit_value]
+        #     final_res = result
+        #     cfx_mx = cfx_mx
+        # else:
+        #     if fit_value > self.best[1]:
+        #         best = [chromosome,fit_value]
+        #         final_res = result
+        #         cfx_mx = cfx_mx
+        #         print(chromosome,fit_value)
         return fit_value
 
-    def mtp_fit(self,chromosome):
+    def mtp_fit(self,lock_chromosome):
         '''用于多进程操作'''
-        return chromosome, self.fitness(chromosome)
+        chromosome = lock_chromosome[0:-1]
+        lock = lock_chromosome[-1]
+        return chromosome, self.fitness(chromosome,lock)
 
     def retain(self):
         '''得到种群保留下来的染色体，从大到小排列
@@ -102,6 +124,7 @@ class GATS(object):
         fit_list = []
         chro_list = []
         new_fitlist = []
+        lock = Lock()
         for chromosome in self.population:
             if chromosome in self.fit_population:
                 fit_list.append((chromosome,self.fit_value[self.fit_population.index(chromosome)]))
@@ -112,7 +135,8 @@ class GATS(object):
                 # self.fit_population.append(chromosome)
                 # self.fit_value.append(chromosome_fitness)
                 #2019.11.13修改增加进程
-                chro_list.append(chromosome)
+                lock_chromosome = chromosome.append(lock)
+                chro_list.append(lock_chromosome)
         if len(chro_list) != 0:
             pool = Pool(4)
             new_fitlist = pool.map(self.mtp_fit, chro_list)
