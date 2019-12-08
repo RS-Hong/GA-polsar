@@ -5,7 +5,7 @@ import readbin
 import numpy as np
 import ga_svm
 import os
-from  multiprocessing import Pool,Lock
+from  multiprocessing import Process, Lock, Manager
 
 # 1.选出初始种群
 # 2.计算适应度函数 
@@ -17,7 +17,7 @@ VARIATION_RATE = 0.05
 
 class GATS(object):
     """docstring for GATS"""
-    def __init__(self, dim,count,dataset):
+    def __init__(self, dim,count,dataset,mdict):
         super(GATS, self).__init__()
         """
         self.dim 表示初始维度即染色体长度
@@ -26,6 +26,7 @@ class GATS(object):
         self.dim = dim
         self.ininum = count
         self.dataset = dataset
+        self.mdict = mdict
         self.population = self.gen_population(dim,count)
         self.fit_population = []    #将计算过适应度函数的染色体和适应度值存入列表中避免重复计算
         self.fit_value = []
@@ -60,17 +61,23 @@ class GATS(object):
         self.crossover(retain_tup,2)
         self.variation()
 
-    def fitness(self,chromosome,lock):
-        '''计算每条染色体的适应度值
-        将最大的适应度及对应的染色体保存进self.best,self.final_res用来记录最终的最优结果
+    def fitness(self,chromosome, lock, mdict):
+        '''
+        # self.best等变量，由于多进程的存在，每个进程都会带有一分完整的资源，使得内部的修改对其他进程不会生效。
+        # 19.12.3修改为通过文件存储来保存多进程的修改
+        # 19.12.4增加进程锁，保护文件内容安全
+        # 19.12.8修改为利用manager共享变量判断最优解
+
+        1.计算每条染色体的适应度值
+        2.将最大的适应度及对应的染色体保存进self.best,self.final_res用来记录最终的最优结果
+
         dataset : 根据染色体形状得到对应特征空间数据集
         num: 分类准确度
         cfx_mx: 混淆矩阵
         result: 分类结果
-        fit_value: 适应度函数值'''
-        best = []
-        currentpath = os.getcws()
-        bestpath = os.path.join(currentpath, 'best.txt')
+        fit_value: 适应度函数值
+        '''
+        currentpath = os.getcwd()
         clsresultpath = os.path.join(currentpath, 'cls_result.txt')
         cfxmxpath = os.path.join(currentpath, 'cfx_mx.txt')
         
@@ -78,49 +85,40 @@ class GATS(object):
         dataset = self.dataset[:,:,np.where(npch == 1)]
         x,y,m,k = dataset.shape
         dataset = dataset.reshape(x,y,k)
-        num, cfx_mx, result = ga_svm.msvm(dataset)
-        # fit_value = 1/(sum(list(map(int,chromosome))) + 1) + num    #适应度函数公式
-        fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2
+        num, cfx_mx, result = ga_svm.msvm(dataset)   
+        fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2   #适应度函数公式
         lock.acquire()
-        if os.path.exists(bestpath) == False:
-            #如若存放best的文件不存在，则创建新的文件用以存放best，分类结果result，混淆矩阵cfx_mx
-            best = [chromosome, fit_value]
-            np.savetxt(bestpath, np.array(best), fmt = '%f', delimiter=',')
+        temp = mdict
+        temp['new_fit_list'].append([chromosome,fit_value])
+        if mdict['best'] == 0:
+            #如best不存在，则创建新的文件用以存放分类结果result，混淆矩阵cfx_mx
+            temp['best'] = [chromosome, fit_value]
             np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
             np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
+            mdict = temp
         else:
             #如果存在则取出best去最新的best比较，将最优的best覆盖原有文件
-            oldbest = np.loadtxt(bestpath, delimiter = ',')
-            if best[1] > oldbest[1]:
-                np.savetxt(bestpath, np.array(best), fmt = '%f', delimiter=',')
+            if fit_value > temp['best'][1]:
+                temp['best'] = [chromosome,fit_value]
                 np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
                 np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
+                mdict = temp
+                print(mdict)
         lock.release()
-        # self.best等变量，由于多进程的存在，每个进程都会带有一分完整的资源，使得内部的修改对其他进程不会生效。
-        # 19.12.3修改为通过文件存储来保存多进程的修改
-        # 19.12.4增加进程锁，保护文件内容安全
-        # if len(self.best) == 0:
-        #     best = [chromosome,fit_value]
-        #     final_res = result
-        #     cfx_mx = cfx_mx
-        # else:
-        #     if fit_value > self.best[1]:
-        #         best = [chromosome,fit_value]
-        #         final_res = result
-        #         cfx_mx = cfx_mx
-        #         print(chromosome,fit_value)
-        return fit_value
 
-    def mtp_fit(self,lock_chromosome):
-        '''用于多进程操作'''
-        chromosome = lock_chromosome[0:-1]
-        lock = lock_chromosome[-1]
-        return chromosome, self.fitness(chromosome,lock)
+    # def mtp_fit(self,lock_chromosome):
+    #     '''用于多进程pool操作'''
+    #     chromosome = lock_chromosome[0:-1]
+    #     lock = lock_chromosome[-1]
+    #     return chromosome, self.fitness(chromosome,lock)
 
     def retain(self):
-        '''得到种群保留下来的染色体，从大到小排列
+        '''
+        19.12.8修改利用manager模块共享变量判断最优解
+        得到种群保留下来的染色体，从大到小排列
         比例为RATAIN_RATE个染色体是直接保留的，
-        比例为RANDOM_SELECT_RATE个是随机保留的'''
+        比例为RANDOM_SELECT_RATE个是随机保留的
+        '''
         fit_list = []
         chro_list = []
         new_fitlist = []
@@ -135,19 +133,92 @@ class GATS(object):
                 # self.fit_population.append(chromosome)
                 # self.fit_value.append(chromosome_fitness)
                 #2019.11.13修改增加进程
-                lock_chromosome = chromosome.append(lock)
-                chro_list.append(lock_chromosome)
+                self.mdict['new_fit_list'] = []
+                chro_list.append(chromosome)
         if len(chro_list) != 0:
-            pool = Pool(4)
-            new_fitlist = pool.map(self.mtp_fit, chro_list)
+            if len(chro_list) % 4 == 0:
+                for i in range(int(len(chro_list) / 4)):
+                    p1 = Process(target = self.fitness, args = (chro_list[i * 4], lock, self.mdict))
+                    p2 = Process(target = self.fitness, args=(chro_list[i * 4 + 1], lock, self.mdict))
+                    p3 = Process(target = self.fitness, args=(chro_list[i * 4 + 2], lock, self.mdict))
+                    p4 = Process(target = self.fitness, args=(chro_list[i * 4 + 3], lock, self.mdict))
+                    p1.start()
+                    p2.start()
+                    p3.start()
+                    p4.start()
+                    p1.join()
+                    p2.join()
+                    p3.join()
+                    p4.join()
+            elif len(chro_list) % 4 == 1 :
+                for i in range(int(len(chro_list)/4)):
+                    p1 = Process(target=self.fitness,args=(chro_list[i * 4],lock, self.mdict))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1.start()
+                    p2.start()
+                    p3.start()
+                    p4.start()
+                    p1.join()
+                    p2.join()
+                    p3.join()
+                    p4.join()
+                p1 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1.start()
+                p1.join()
+            elif len(chro_list) % 4 == 2:
+                for i in range(int(len(chro_list)/4)):
+                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], lock, self.mdict))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1.start()
+                    p2.start()
+                    p3.start()
+                    p4.start()
+                    p1.join()
+                    p2.join()
+                    p3.join()
+                    p4.join()
+                p1 = Process(target=self.fitness, args=(chro_list[-2], lock, self.mdict))
+                p2 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1.start()
+                p2.start()
+                p1.join()
+                p2.join()
+            elif len(chro_list) % 4 == 3:
+                for i in range(int(len(chro_list)/4)):
+                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], lock, self.mdict))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1.start()
+                    p2.start()
+                    p3.start()
+                    p4.start()
+                    p1.join()
+                    p2.join()
+                    p3.join()
+                    p4.join()
+                p1 = Process(target=self.fitness, args=(chro_list[-3], lock, self.mdict))
+                p2 = Process(target=self.fitness, args=(chro_list[-2], lock, self.mdict))
+                p3 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1.start()
+                p2.start()
+                p3.start()
+                p1.join()
+                p2.join()
+                p3.join()
+
+            new_fitlist = self.mdict['new_fit_list']
             fit_list = fit_list + new_fitlist
             for l in new_fitlist:
+                #将新得到的fitlist列表加入库中
                 self.fit_population.append(l[0])
                 self.fit_value.append(l[1])
-        # fit_list = [(chromosome,self.fitness(chromosome)) for chromosome in self.population]
         fit_list.sort(key = lambda x:x[1],reverse = True)
         retain_num = math.ceil(self.ininum * RETAIN_RATE)
-        #retain_tup[(chromosome,fitnessvalue),......]
         retain_tup = fit_list[:retain_num]
         for chromosome in fit_list[retain_num:]:
             if random.random() < RANDOM_SELECT_RATE:
@@ -224,12 +295,15 @@ class GATS(object):
 
 
 def main():
+    manager = Manager()
+    mdict = manager.dict()
+    mdict['best'] = 0
+    mdict['new_fit_list'] = []
     fit_pool = []  # 适应度函数值池,用以绘制折线图
-
     directory = "C:\\Users\\Administrator\\Desktop\\AIRSAR_Flevoland_LEE\\T3"
     dataset, trait_pool = readbin.readallbin(directory, 750, 1024)
     x, y, k = dataset.shape
-    gats = GATS(k,8,dataset)
+    gats = GATS(k,8,dataset,mdict)
     j = 0
     #1.j控制进化代数
     #2.用for循环设定初始进化代数，并将最优染色体对应的结果与混淆矩阵绘制
