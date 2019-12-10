@@ -17,7 +17,7 @@ VARIATION_RATE = 0.05
 
 class GATS(object):
     """docstring for GATS"""
-    def __init__(self, dim,count,dataset,mdict):
+    def __init__(self, dim,count,dataset,mdict,mlist):
         super(GATS, self).__init__()
         """
         self.dim 表示初始维度即染色体长度
@@ -27,6 +27,8 @@ class GATS(object):
         self.ininum = count
         self.dataset = dataset
         self.mdict = mdict
+        self.mlist = mlist
+        self.lock = Lock()
         self.population = self.gen_population(dim,count)
         self.fit_population = []    #将计算过适应度函数的染色体和适应度值存入列表中避免重复计算
         self.fit_value = []
@@ -61,7 +63,7 @@ class GATS(object):
         self.crossover(retain_tup,2)
         self.variation()
 
-    def fitness(self,chromosome, lock, mdict):
+    def fitness(self,chromosome, lock, mdict, mlist):
         '''
         # self.best等变量，由于多进程的存在，每个进程都会带有一分完整的资源，使得内部的修改对其他进程不会生效。
         # 19.12.3修改为通过文件存储来保存多进程的修改
@@ -89,28 +91,25 @@ class GATS(object):
         fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2   #适应度函数公式
         lock.acquire()
         temp = mdict
-        temp['new_fit_list'].append([chromosome,fit_value])
+        mlist.append([chromosome,fit_value])
+        print(mlist)
         if mdict['best'] == 0:
             #如best不存在，则创建新的文件用以存放分类结果result，混淆矩阵cfx_mx
             temp['best'] = [chromosome, fit_value]
-            np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
-            np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
+            np.savetxt(clsresultpath, np.array(result), fmt='%d', delimiter=',')
+            np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%d', delimiter=',')
             mdict = temp
+            print(mdict)
         else:
             #如果存在则取出best去最新的best比较，将最优的best覆盖原有文件
             if fit_value > temp['best'][1]:
                 temp['best'] = [chromosome,fit_value]
-                np.savetxt(clsresultpath, np.array(result), fmt='%f', delimiter=',')
-                np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%f', delimiter=',')
+                np.savetxt(clsresultpath, np.array(result), fmt='%d', delimiter=',')
+                np.savetxt(cfxmxpath, np.array(cfx_mx), fmt='%d', delimiter=',')
                 mdict = temp
                 print(mdict)
         lock.release()
 
-    # def mtp_fit(self,lock_chromosome):
-    #     '''用于多进程pool操作'''
-    #     chromosome = lock_chromosome[0:-1]
-    #     lock = lock_chromosome[-1]
-    #     return chromosome, self.fitness(chromosome,lock)
 
     def retain(self):
         '''
@@ -122,7 +121,6 @@ class GATS(object):
         fit_list = []
         chro_list = []
         new_fitlist = []
-        lock = Lock()
         for chromosome in self.population:
             if chromosome in self.fit_population:
                 fit_list.append((chromosome,self.fit_value[self.fit_population.index(chromosome)]))
@@ -133,15 +131,15 @@ class GATS(object):
                 # self.fit_population.append(chromosome)
                 # self.fit_value.append(chromosome_fitness)
                 #2019.11.13修改增加进程
-                self.mdict['new_fit_list'] = []
+                self.mlist[:] = []
                 chro_list.append(chromosome)
         if len(chro_list) != 0:
             if len(chro_list) % 4 == 0:
                 for i in range(int(len(chro_list) / 4)):
-                    p1 = Process(target = self.fitness, args = (chro_list[i * 4], lock, self.mdict))
-                    p2 = Process(target = self.fitness, args=(chro_list[i * 4 + 1], lock, self.mdict))
-                    p3 = Process(target = self.fitness, args=(chro_list[i * 4 + 2], lock, self.mdict))
-                    p4 = Process(target = self.fitness, args=(chro_list[i * 4 + 3], lock, self.mdict))
+                    p1 = Process(target = self.fitness, args = (chro_list[i * 4], self.lock, self.mdict, self.mlist))
+                    p2 = Process(target = self.fitness, args=(chro_list[i * 4 + 1], self.lock, self.mdict, self.mlist))
+                    p3 = Process(target = self.fitness, args=(chro_list[i * 4 + 2], self.lock, self.mdict, self.mlist))
+                    p4 = Process(target = self.fitness, args=(chro_list[i * 4 + 3], self.lock, self.mdict, self.mlist))
                     p1.start()
                     p2.start()
                     p3.start()
@@ -152,10 +150,10 @@ class GATS(object):
                     p4.join()
             elif len(chro_list) % 4 == 1 :
                 for i in range(int(len(chro_list)/4)):
-                    p1 = Process(target=self.fitness,args=(chro_list[i * 4],lock, self.mdict))
-                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
-                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
-                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1 = Process(target=self.fitness,args=(chro_list[i * 4],self.lock, self.mdict, self.mlist))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], self.lock, self.mdict, self.mlist))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], self.lock, self.mdict, self.mlist))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], self.lock, self.mdict, self.mlist))
                     p1.start()
                     p2.start()
                     p3.start()
@@ -164,15 +162,15 @@ class GATS(object):
                     p2.join()
                     p3.join()
                     p4.join()
-                p1 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1 = Process(target=self.fitness, args=(chro_list[-1], self.lock, self.mdict, self.mlist))
                 p1.start()
                 p1.join()
             elif len(chro_list) % 4 == 2:
                 for i in range(int(len(chro_list)/4)):
-                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], lock, self.mdict))
-                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
-                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
-                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], self.lock, self.mdict, self.mlist))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], self.lock, self.mdict, self.mlist))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], self.lock, self.mdict, self.mlist))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], self.lock, self.mdict, self.mlist))
                     p1.start()
                     p2.start()
                     p3.start()
@@ -181,18 +179,18 @@ class GATS(object):
                     p2.join()
                     p3.join()
                     p4.join()
-                p1 = Process(target=self.fitness, args=(chro_list[-2], lock, self.mdict))
-                p2 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1 = Process(target=self.fitness, args=(chro_list[-2], self.lock, self.mdict, self.mlist))
+                p2 = Process(target=self.fitness, args=(chro_list[-1], self.lock, self.mdict, self.mlist))
                 p1.start()
                 p2.start()
                 p1.join()
                 p2.join()
             elif len(chro_list) % 4 == 3:
                 for i in range(int(len(chro_list)/4)):
-                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], lock, self.mdict))
-                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], lock, self.mdict))
-                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], lock, self.mdict))
-                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], lock, self.mdict))
+                    p1 = Process(target=self.fitness, args=(chro_list[i * 4], self.lock, self.mdict, self.mlist))
+                    p2 = Process(target=self.fitness, args=(chro_list[i * 1], self.lock, self.mdict, self.mlist))
+                    p3 = Process(target=self.fitness, args=(chro_list[i * 2], self.lock, self.mdict, self.mlist))
+                    p4 = Process(target=self.fitness, args=(chro_list[i * 3], self.lock, self.mdict, self.mlist))
                     p1.start()
                     p2.start()
                     p3.start()
@@ -201,17 +199,16 @@ class GATS(object):
                     p2.join()
                     p3.join()
                     p4.join()
-                p1 = Process(target=self.fitness, args=(chro_list[-3], lock, self.mdict))
-                p2 = Process(target=self.fitness, args=(chro_list[-2], lock, self.mdict))
-                p3 = Process(target=self.fitness, args=(chro_list[-1], lock, self.mdict))
+                p1 = Process(target=self.fitness, args=(chro_list[-3], self.lock, self.mdict, self.mlist))
+                p2 = Process(target=self.fitness, args=(chro_list[-2], self.lock, self.mdict, self.mlist))
+                p3 = Process(target=self.fitness, args=(chro_list[-1], self.lock, self.mdict, self.mlist))
                 p1.start()
                 p2.start()
                 p3.start()
                 p1.join()
                 p2.join()
                 p3.join()
-
-            new_fitlist = self.mdict['new_fit_list']
+            new_fitlist = self.mlist[:]
             fit_list = fit_list + new_fitlist
             for l in new_fitlist:
                 #将新得到的fitlist列表加入库中
@@ -283,7 +280,7 @@ class GATS(object):
                 #要变异的染色体
                 pos = random.randint(0,len(self.population) - 1)
                 var_chrom = self.population[i]
-                fit_value = self.fitness(var_chrom)
+                fit_value = self.fitness(var_chrom, self.lock, self.mdict, self.mlist)
                 if var_chrom[pos] == '0':
                     var_chrom[pos] = '1'
                 else:
@@ -297,13 +294,13 @@ class GATS(object):
 def main():
     manager = Manager()
     mdict = manager.dict()
+    mlist = manager.list()
     mdict['best'] = 0
-    mdict['new_fit_list'] = []
     fit_pool = []  # 适应度函数值池,用以绘制折线图
     directory = "C:\\Users\\Administrator\\Desktop\\AIRSAR_Flevoland_LEE\\T3"
     dataset, trait_pool = readbin.readallbin(directory, 750, 1024)
     x, y, k = dataset.shape
-    gats = GATS(k,8,dataset,mdict)
+    gats = GATS(k,8,dataset,mdict,mlist)
     j = 0
     #1.j控制进化代数
     #2.用for循环设定初始进化代数，并将最优染色体对应的结果与混淆矩阵绘制
