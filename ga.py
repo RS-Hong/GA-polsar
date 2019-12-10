@@ -29,7 +29,7 @@ class GATS(object):
         self.mdict = mdict
         self.mlist = mlist
         self.lock = Lock()
-        self.population = self.gen_population(dim,count)
+        self.population = self.gen_population(dim,count)    #每次迭代的种群
         self.fit_population = []    #将计算过适应度函数的染色体和适应度值存入列表中避免重复计算
         self.fit_value = []
 
@@ -91,7 +91,7 @@ class GATS(object):
         fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2   #适应度函数公式
         lock.acquire()
         temp = mdict
-        mlist.append([chromosome,fit_value])
+        mlist.append((chromosome,fit_value))
         print(mlist)
         if mdict['best'] == 0:
             #如best不存在，则创建新的文件用以存放分类结果result，混淆矩阵cfx_mx
@@ -118,9 +118,9 @@ class GATS(object):
         比例为RATAIN_RATE个染色体是直接保留的，
         比例为RANDOM_SELECT_RATE个是随机保留的
         '''
-        fit_list = []
+        fit_list = []   #population中所有的chromosome及对应的fitvalue
         chro_list = []
-        new_fitlist = []
+        new_fitlist = []    #未计算过的chromosome及对应的fitvalue
         for chromosome in self.population:
             if chromosome in self.fit_population:
                 fit_list.append((chromosome,self.fit_value[self.fit_population.index(chromosome)]))
@@ -131,7 +131,6 @@ class GATS(object):
                 # self.fit_population.append(chromosome)
                 # self.fit_value.append(chromosome_fitness)
                 #2019.11.13修改增加进程
-                self.mlist[:] = []
                 chro_list.append(chromosome)
         if len(chro_list) != 0:
             if len(chro_list) % 4 == 0:
@@ -220,6 +219,7 @@ class GATS(object):
         for chromosome in fit_list[retain_num:]:
             if random.random() < RANDOM_SELECT_RATE:
                 retain_tup.append(chromosome)
+        self.mlist[:] = []
         return retain_tup
 
     def crossover(self,retain_tup,method):
@@ -280,14 +280,18 @@ class GATS(object):
                 #要变异的染色体
                 pos = random.randint(0,len(self.population) - 1)
                 var_chrom = self.population[i]
-                fit_value = self.fitness(var_chrom, self.lock, self.mdict, self.mlist)
+                fit_value = self.fit_value[self.population.index(var_chrom)]
                 if var_chrom[pos] == '0':
                     var_chrom[pos] = '1'
                 else:
                     var_chrom[pos] = '0'
-                if var_chrom not in self.population:
-                    if self.fitness(var_chrom) > fit_value:
+                if var_chrom not in self.fit_population:
+                    var_fitvale = self.fitness(var_chrom, self.lock, self.mdict, self.mlist)
+                    if var_fitvale > fit_value:
+                        # 防止变异摧毁好基因
                         self.population[i] = var_chrom
+                    self.fit_population.append(var_chrom)
+                    self.fit_value.append(var_fitvale)
 
 
 
