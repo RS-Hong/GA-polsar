@@ -13,5 +13,5 @@
 # plt.legend((l1[0], l2[0]), ('1', '2'))
 # plt.show()
 import numpy as np
-
-print((np.e**11-np.e**10)/np.e**11)
+import os
+print(os.path.join(os.getcwd(),'cfx_mx.txt'))

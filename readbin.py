@@ -18,6 +18,8 @@ def all_path(dirname):
                 result.append(apath)
     return result
 
+#************************************************  read  ************************************************#
+#************************************************  read  ************************************************#
 
 def readbin(lines,samples,filename):
     '''读取二进制bin文件'''
@@ -28,7 +30,7 @@ def readbin(lines,samples,filename):
             t3[i, ...] = struct.unpack(str(samples) + 'f', data)
     return t3
 
-    
+
 def readbin2(lines,samples,filename):
     t3_real = np.zeros([lines,samples],dtype = float)
     t3_imag = np.zeros([lines,samples],dtype = float)
@@ -129,7 +131,48 @@ def trainbin(data,samplelist):
     #         traindata = np.concatenate([traindata,train_data])
     # return traindata
 
+#************************************************  save  ************************************************#
+#************************************************  save  ************************************************#
 
+def savebin(filename,data):
+    lines,samples = data.shape
+    with open(filename, "wb") as f:
+        for i in range(lines):
+            datai = struct.pack(str(samples) + 'f',*data[i])
+            f.write(datai)
+
+
+def savehdr(dirname,name,lines,samples,interleave = 'bsq'):
+    binname = name + '.bin'
+    hdrname = name + '.bin.hdr'
+    filename = os.path.join(dirname, hdrname)
+    if os.path.exists(filename) == False:
+        with open(filename,'w') as f:
+            f.write('ENVI' + '\n')
+            f.write('description = {' + '\n')
+            f.write('PolSARpro File Imported to ENVI}' + '\n')
+            f.write('samples = %d'%(samples) + '\n')
+            f.write('lines   = %d' % (lines) + '\n')
+            f.write('bands   = 1' + '\n')
+            f.write('header offset = 0' + '\n')
+            f.write('file type = ENVI Standard' + '\n')
+            f.write('data type = 4' + '\n')
+            f.write('interleave = {}'.format(interleave) + '\n')
+            f.write('sensor type = Unknown' + '\n')
+            f.write('byte order = 0' + '\n')
+            f.write('band names = {' + '\n')
+            f.write('%s }'%(binname) + '\n')
+    else:
+        print('该文件已存在！')
+
+
+
+def creatcfg(dirname,lines,samples,poltyp):
+    pass
+
+
+#************************************************  draw  ************************************************#
+#************************************************  draw  ************************************************#
 
 def draw_cls(cls_data,k):
     '''绘制类别彩色图像
@@ -178,7 +221,7 @@ def draw_fit(fit_pool):
     plt.subplots_adjust(bottom = 0.15)
     plt.ylabel(u'适应度函数值')
     plt.xlabel(u'迭代次数')
-    plt.ylim(ymin = 0)
+    plt.ylim(ymin = 0, ymax = 2)
     plt.xlim(xmin = 0)
     plt.show()
 

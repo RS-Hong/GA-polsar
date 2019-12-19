@@ -88,7 +88,7 @@ class GATS(object):
         x,y,m,k = dataset.shape
         dataset = dataset.reshape(x,y,k)
         num, cfx_mx, result = ga_svm.msvm(dataset)   
-        fit_value = 1-(sum(list(map(int,chromosome)))/len(chromosome))**2   #适应度函数公式
+        fit_value = 0.8 * (len(chromosome)-sum(list(map(int,chromosome))))/len(chromosome) + num   #适应度函数公式
         lock.acquire()
         temp = mdict
         mlist.append((chromosome,fit_value))
@@ -109,6 +109,7 @@ class GATS(object):
                 mdict = temp
                 print(mdict)
         lock.release()
+        return fit_value
 
 
     def retain(self):
@@ -278,7 +279,7 @@ class GATS(object):
             if random.random() < VARIATION_RATE:
                 #变异位置
                 #要变异的染色体
-                pos = random.randint(0,len(self.population) - 1)
+                pos = random.randint(0,len(self.population[0]) - 1)
                 var_chrom = self.population[i]
                 fit_value = self.fit_value[self.population.index(var_chrom)]
                 if var_chrom[pos] == '0':
@@ -304,24 +305,27 @@ def main():
     directory = "C:\\Users\\Administrator\\Desktop\\AIRSAR_Flevoland_LEE\\T3"
     dataset, trait_pool = readbin.readallbin(directory, 750, 1024)
     x, y, k = dataset.shape
-    gats = GATS(k,8,dataset,mdict,mlist)
+    gats = GATS(k,24,dataset,mdict,mlist)
     j = 0
     #1.j控制进化代数
     #2.用for循环设定初始进化代数，并将最优染色体对应的结果与混淆矩阵绘制
-    for i in range(6):
+    i_t = 100 #控制进化代数
+    for i in range(i_t):
         gats.evolve()
         j += 1
         print('第 %d 次迭代正在进行' % (j))
-        fit_pool.append(gats.best[1])
-        if j == 6:
+        fit_pool.append(mdict['best'][1])
+        if j == i_t:
             readbin.draw_fit(fit_pool)
-            readbin.draw_cls(gats.final_res,15)
-            x,y = gats.cfx_mx.shape
+            final_res = np.loadtxt("C:\\Users\\Administrator\\Desktop\\原始\\github\\GA\\cls_result.txt", delimiter=',')
+            readbin.draw_cls(final_res,15)
+            cfx_mx = np.loadtxt(os.path.join(os.getcwd(), 'cfx_mx.txt'), delimiter=',')
+            x,y = cfx_mx.shape
             for i in range(x):
                 for j in range(y):
-                    print("%6d" % (gats.cfx_mx[i,j]),end='')
+                    print("%6d" % (cfx_mx[i,j]),end='')
                 print("")
-        print(gats.best)
+        print(mdict['best'])
 
 if __name__ == '__main__':
     main()
